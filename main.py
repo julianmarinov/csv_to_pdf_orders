@@ -350,7 +350,7 @@ def quit_app():
 # ---------------
 root = tk.Tk()
 root.title("Order PDF Generator")
-root.geometry("800x300")
+root.geometry("700x300")
 
 csv_path_var = tk.StringVar()
 
