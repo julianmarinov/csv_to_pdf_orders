@@ -8,9 +8,8 @@ import re
 import threading
 import subprocess
 
-# Global flag used to signal the worker thread to stop processing.
+# A global flag that the worker thread checks to see if processing should stop.
 stop_requested = False
-
 
 def get_default_font_path():
     """Return a default Unicode TTF font path based on the OS."""
@@ -24,47 +23,35 @@ def get_default_font_path():
     else:
         raise RuntimeError("Unsupported OS or cannot determine default font path.")
 
-
 FONT_PATH = get_default_font_path()
-
 
 def sanitize_filename(filename: str) -> str:
     """Replace invalid filename characters with underscores."""
     invalid_chars = r'\/:*?"<>|'
     return re.sub(f"[{re.escape(invalid_chars)}]", "_", filename)
 
-
 class PDFGenerator(FPDF):
-    """Custom FPDF class that accepts an 'order_number' to customize the header text."""
-
-    def __init__(self, order_number, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.order_number = order_number  # We'll use this in the header
-
         try:
             # Attempt to register default font (regular + bold).
             self.add_font("DefaultFont", "", FONT_PATH, uni=True)
             self.add_font("DefaultFont", "B", FONT_PATH, uni=True)
-            # Turn off auto-page-break so everything can stay on one page if it's not too large.
+            # Turn off auto-page-break so everything stays on one page if short enough.
             self.set_auto_page_break(False)
         except Exception as e:
             messagebox.showerror(
                 "Font Error",
                 f"Failed to load font from {FONT_PATH}.\n"
-                f"Please ensure this font file is installed.\nError: {e}"
+                f"Please ensure this font file is installed or available.\nError: {e}"
             )
             raise
 
     def header(self):
-        """
-        Override the default header to display:
-        "Order Number <order_number>"
-        """
+        """Create a header with bold text at 12pt, centered."""
         self.set_font("DefaultFont", "B", 12)
-        title_text = f"Order Number {self.order_number}"
-        self.cell(0, 10, title_text, align="C", new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 10, "Order Details", align="C", new_x="LMARGIN", new_y="NEXT")
         self.ln(3)
-
 
 def print_column_fields(pdf, fields, data, start_x, start_y, col_width):
     """
@@ -72,7 +59,7 @@ def print_column_fields(pdf, fields, data, start_x, start_y, col_width):
     wrapping text as needed. Returns the final Y position after printing all fields.
     """
     current_y = start_y
-    line_height = 6  # line spacing
+    line_height = 6
 
     for label, key in fields:
         # Label in 14pt bold
@@ -92,56 +79,29 @@ def print_column_fields(pdf, fields, data, start_x, start_y, col_width):
 
     return current_y
 
-
-def generate_pdf(data, output_path, order_number):
-    """
-    Generates a single-page PDF for one order. The 'order_number' is used in the header.
-
-    New layout:
-      Left column:
-        - Name (combined)
-        - Email
-        - Phone
-        - Shipping Method Title
-        - City
-        - Address 1&2
-
-      Right column:
-        - Item Name
-        - SKU
-        - Quantity
-        - Item Cost
-        - [Potential more item lines if desired]
-        - Last line: Order Total Amount
-    """
+def generate_pdf(data, output_path):
+    """Generates a single-page PDF (two columns) for one order."""
     try:
-        pdf = PDFGenerator(order_number=order_number, format="Letter", orientation="P")
+        pdf = PDFGenerator(format="Letter", orientation="P")
         pdf.add_page()
 
-        # We'll store "Full Name" in data to combine First/Last for convenience.
-        # The CSV still has "First Name (Billing)" and "Last Name (Billing)" columns,
-        # but we want to display them together in one line: "Name".
-        full_name = f"{data.get('First Name (Billing)', '').strip()} {data.get('Last Name (Billing)', '').strip()}"
-        data["Full Name"] = full_name.strip()
-
-        # Define fields in each column
-        # Left column
+        # Two sets of fields for two columns
         fields_col1 = [
-            ("Name", "Full Name"),
-            ("Email", "Email (Billing)"),
-            ("Phone", "Phone (Billing)"),
-            ("Shipping Method Title", "Shipping Method Title"),
-            ("City", "City (Billing)"),
-            ("Address 1&2", "Address 1&2 (Billing)"),
+            ("Order Number", "Order Number"),
+            ("First Name (Billing)", "First Name (Billing)"),
+            ("Last Name (Billing)", "Last Name (Billing)"),
+            ("Address 1&2 (Billing)", "Address 1&2 (Billing)"),
+            ("City (Billing)", "City (Billing)"),
+            ("Email (Billing)", "Email (Billing)"),
+            ("Phone (Billing)", "Phone (Billing)"),
         ]
-
-        # Right column (and we put "Order Total Amount" last)
         fields_col2 = [
-            ("Item Name", "Item Name"),
-            ("SKU", "SKU"),
-            ("Quantity", "Quantity (- Refund)"),
-            ("Item Cost", "Item Cost"),
+            ("Shipping Method Title", "Shipping Method Title"),
             ("Order Total Amount", "Order Total Amount"),
+            ("SKU", "SKU"),
+            ("Item Name", "Item Name"),
+            ("Quantity (- Refund)", "Quantity (- Refund)"),
+            ("Item Cost", "Item Cost"),
         ]
 
         page_width = pdf.w - pdf.l_margin - pdf.r_margin
@@ -164,33 +124,23 @@ def generate_pdf(data, output_path, order_number):
         )
         raise
 
-
 def validate_csv(df):
     """
-    Checks for required columns and returns a list of any missing columns.
+    Checks for missing columns and returns a list of any that are missing.
     """
-    # Example: if your script absolutely needs these columns to run.
     required_columns = [
         "Order Number",
         "First Name (Billing)",
         "Last Name (Billing)",
-        "Email (Billing)",
-        "Phone (Billing)",
-        "Item Name",
-        "SKU",
-        "Quantity (- Refund)",
-        "Item Cost",
-        "Order Total Amount"
-        # Add more if they're strictly required for your generation logic.
+        # Add any other columns your process needs
     ]
     missing = [col for col in required_columns if col not in df.columns]
     return missing
 
-
 def process_csv(csv_path, progress_label, progress_bar, open_folder_btn):
     """
-    Reads the CSV, checks for missing columns, then generates one PDF per row.
-    Allows user to cancel via the global 'stop_requested' flag.
+    Reads the CSV, checks for required columns, then generates
+    one PDF per row. A stop flag can cancel mid-way.
     """
     global stop_requested
 
@@ -200,22 +150,23 @@ def process_csv(csv_path, progress_label, progress_bar, open_folder_btn):
         messagebox.showerror(
             "CSV Error",
             "Failed to read the CSV file.\n\n"
-            "Please ensure it's not open in another program and is valid CSV.\n\n"
+            "Please ensure the file is not open in another program and is valid CSV.\n\n"
             f"Details: {e}"
         )
-        # Re-enable UI
+        # Re-enable buttons
         generate_button.config(state="normal")
         stop_button.config(state="disabled")
         return
 
-    # Check for missing columns
+    # CSV validations
     missing_columns = validate_csv(df)
     if missing_columns:
         messagebox.showerror(
             "CSV Error",
             f"The CSV file is missing required columns: {', '.join(missing_columns)}.\n"
-            "Please correct the file and try again."
+            f"Please fix or provide the correct file."
         )
+        # Re-enable buttons
         generate_button.config(state="normal")
         stop_button.config(state="disabled")
         return
@@ -225,6 +176,8 @@ def process_csv(csv_path, progress_label, progress_bar, open_folder_btn):
     os.makedirs(output_folder, exist_ok=True)
 
     total_rows = len(df)
+
+    # Set up progress bar
     progress_bar["value"] = 0
     progress_bar["maximum"] = total_rows
 
@@ -246,9 +199,8 @@ def process_csv(csv_path, progress_label, progress_bar, open_folder_btn):
         output_path = os.path.join(output_folder, safe_filename)
 
         data = row.to_dict()
-
         try:
-            generate_pdf(data, output_path, order_number)
+            generate_pdf(data, output_path)
         except Exception as e:
             messagebox.showerror(
                 "Order Processing Error",
@@ -257,9 +209,9 @@ def process_csv(csv_path, progress_label, progress_bar, open_folder_btn):
             )
 
     else:
-        # If we didn't break (meaning stop wasn't triggered)
         progress_label.config(text="All PDFs generated successfully.")
         messagebox.showinfo("Success", "PDF generation complete.")
+        # Enable "Open Folder" button so user can easily view results
         open_folder_btn.config(state="normal")
 
     # Reset stop state & re-enable UI
@@ -267,23 +219,20 @@ def process_csv(csv_path, progress_label, progress_bar, open_folder_btn):
     generate_button.config(state="normal")
     stop_button.config(state="disabled")
 
-
 def start_process_csv(csv_path, progress_label, progress_bar, open_folder_btn):
     """
-    Launches process_csv in a background thread, so the UI doesn't freeze
-    and the user can press 'Stop' to cancel mid-way.
+    Launches process_csv in a background thread so the UI doesn't freeze
+    and the user can click 'Stop' to cancel mid-way.
     """
-
     def worker():
         process_csv(csv_path, progress_label, progress_bar, open_folder_btn)
 
     generate_button.config(state="disabled")
     stop_button.config(state="normal")
-    open_folder_btn.config(state="disabled")
+    open_folder_btn.config(state="disabled")  # Hide "Open Folder" until success
 
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
 
 def browse_file():
     """Open a file dialog to let the user pick the CSV file."""
@@ -295,9 +244,11 @@ def browse_file():
     if file_path:
         csv_path_var.set(file_path)
 
-
 def generate():
-    """Starts the CSV processing in a background thread (after validating the CSV path)."""
+    """
+    Validates CSV path and starts the processing thread.
+    Resets any previous stop state.
+    """
     global stop_requested
     stop_requested = False
 
@@ -308,16 +259,19 @@ def generate():
 
     start_process_csv(csv_path, progress_label, progress_bar, open_folder_button)
 
-
 def stop_process():
-    """Sets the global flag that signals the worker thread to stop."""
+    """
+    Sets a global flag to request a stop.
+    The background thread checks this flag between rows.
+    """
     global stop_requested
     stop_requested = True
     progress_label.config(text="Canceling...")
 
-
 def open_output_folder():
-    """Open 'PDF Orders' folder in the file manager."""
+    """
+    Open the 'PDF Orders' folder in the user's file manager.
+    """
     csv_path = csv_path_var.get()
     if not csv_path:
         return
@@ -325,6 +279,7 @@ def open_output_folder():
     base_dir = os.path.dirname(csv_path)
     output_folder = os.path.join(base_dir, "PDF Orders")
 
+    # Attempt to open folder across different OS
     system = platform.system()
     try:
         if system == "Windows":
@@ -339,11 +294,9 @@ def open_output_folder():
             f"Could not open folder automatically.\nPath: {output_folder}\nError: {e}"
         )
 
-
 def quit_app():
     """Close the application."""
     root.quit()
-
 
 # ---------------
 #   GUI SETUP
@@ -370,10 +323,10 @@ browse_button.grid(row=0, column=2, padx=5, pady=5)
 
 # Generate & Stop
 generate_button = tk.Button(main_frame, text="Generate PDFs", command=generate)
-generate_button.grid(row=1, column=2, pady=10, sticky="e")
+generate_button.grid(row=1, column=0, pady=10, sticky="e")
 
 stop_button = tk.Button(main_frame, text="Stop", command=stop_process)
-stop_button.grid(row=4, column=1, pady=10, sticky="w")
+stop_button.grid(row=1, column=1, pady=10, sticky="w")
 stop_button.config(state="disabled")
 
 # Progress label
@@ -384,13 +337,13 @@ progress_label.grid(row=2, column=0, columnspan=3, pady=5)
 progress_bar = ttk.Progressbar(main_frame, orient="horizontal", length=400, mode="determinate")
 progress_bar.grid(row=3, column=0, columnspan=3, pady=5)
 
-# Open folder button (disabled until success)
+# Open folder button (initially disabled until success)
 open_folder_button = tk.Button(main_frame, text="Open Output Folder", command=open_output_folder)
-open_folder_button.grid(row=5, column=0, columnspan=3, pady=5)
+open_folder_button.grid(row=4, column=0, columnspan=3, pady=5)
 open_folder_button.config(state="disabled")
 
 # Quit
 quit_button = tk.Button(main_frame, text="Quit", command=quit_app)
-quit_button.grid(row=4, column=1, pady=10)
+quit_button.grid(row=5, column=0, columnspan=3, pady=5)
 
 root.mainloop()
