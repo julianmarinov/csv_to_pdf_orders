@@ -241,7 +241,7 @@ def process_csv(csv_path, progress_label, progress_bar, open_folder_btn):
         last_name = str(row.get("Last Name (Billing)", "")).strip()
         order_number = str(row.get("Order Number", "")).strip()
 
-        raw_filename = f"{first_name} {last_name} {order_number}.pdf"
+        raw_filename = f"{order_number} - {first_name} {last_name}.pdf"
         safe_filename = sanitize_filename(raw_filename)
         output_path = os.path.join(output_folder, safe_filename)
 
