@@ -62,7 +62,7 @@ class PDFGenerator(FPDF):
         """
         self.set_font("DefaultFont", "B", 12)
         title_text = f"Order Number {self.order_number}"
-        self.cell(0, 10, title_text, align="C", new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 10, title_text, align="C", ln=1)
         self.ln(3)
 
 
